@@ -1,7 +1,7 @@
 
 // === API KEYS ===
-const OPENAI_API_KEY = "YOUR_OPENAI_API_KEY";
-const BITLY_TOKEN = "YOUR_BITLY_TOKEN";
+const OPENAI_API_KEY = "your_openai_api_key_here";
+const BITLY_TOKEN = "your_bitly_token_here";
 
 // === ON OPEN MENU ===
 function onOpen() {
