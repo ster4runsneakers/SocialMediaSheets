@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>QUnit Tests</title>
+  <link rel="stylesheet" href="https://code.jquery.com/qunit/qunit-2.20.0.css">
+</head>
+<body>
+  <div id="qunit"></div>
+  <div id="qunit-fixture"></div>
+  <script src="https://code.jquery.com/qunit/qunit-2.20.0.js"></script>
+  <script src="Code.gs"></script>
+  <script>
+    // Mocks for Google Apps Script services
+    const Mocks = {
+      DriveApp: {
+        folders: {},
+        files: {},
+        createFolder: function(name) {
+          this.folders[name] = {
+            files: [],
+            createFile: function(blob) {
+              const file = {
+                id: 'file_id_' + Math.random(),
+                url: 'http://fake.drive.url/' + (blob.name || 'file'),
+                name: blob.name,
+                blob: blob,
+                getUrl: function() { return this.url; }
+              };
+              Mocks.DriveApp.files[file.id] = file;
+              this.files.push(file);
+              return file;
+            }
+          };
+          return this.folders[name];
+        },
+        getFileById: function(id) {
+          return this.files[id];
+        },
+        _reset: function() {
+          this.folders = {};
+          this.files = {};
+        }
+      },
+
+      DocumentApp: {
+        documents: {},
+        create: function(name) {
+          const doc = {
+            id: 'doc_id_' + Math.random(),
+            name: name,
+            body: {
+              content: [],
+              appendParagraph: function(text) {
+                this.content.push(text);
+              }
+            },
+            getBody: function() { return this.body; },
+            getId: function() { return this.id; },
+            saveAndClose: function() {},
+            getAs: function(contentType) {
+              return {
+                name: this.name + '.pdf',
+                contentType: contentType
+              }
+            }
+          };
+          this.documents[doc.id] = doc;
+          // Also create a mock file in DriveApp
+          Mocks.DriveApp.files[doc.id] = doc;
+          return doc;
+        },
+        _reset: function() {
+          this.documents = {};
+        }
+      },
+
+      SpreadsheetApp: {
+        ui: {
+          createMenu: function() { return this; },
+          addItem: function() { return this; },
+          addToUi: function() {}
+        },
+        spreadsheet: {
+          sheets: {},
+          getSheetByName: function(name) {
+            return this.sheets[name];
+          },
+          insertSheet: function(name) {
+            const newSheet = Mocks.createMockSheet(name, [[]]);
+            this.sheets[name] = newSheet;
+            return newSheet;
+          },
+          _addSheet: function(name, data) {
+            this.sheets[name] = Mocks.createMockSheet(name, data);
+          },
+          _reset: function() {
+            this.sheets = {};
+          }
+        },
+        getActiveSpreadsheet: function() {
+          return this.spreadsheet;
+        },
+        getUi: function() {
+          return this.ui;
+        },
+        _reset: function() {
+          this.spreadsheet._reset();
+        }
+      },
+
+      UrlFetchApp: {
+        responses: {},
+        fetch: function(url, options) {
+          if (this.responses[url]) {
+            const response = this.responses[url];
+            if (response.throws) {
+              throw new Error(response.throws);
+            }
+            return response;
+          }
+          return {
+            getContentText: () => '{}',
+            getResponseCode: () => 200
+          };
+        },
+        _setResponse: function(url, content, code = 200) {
+          this.responses[url] = {
+            getContentText: () => typeof content === 'string' ? content : JSON.stringify(content),
+            getResponseCode: () => code
+          };
+        },
+        _setError: function(url, message) {
+            this.responses[url] = { throws: message };
+        },
+        _reset: function() {
+          this.responses = {};
+        }
+      },
+
+      Logger: {
+        logs: [],
+        log: function(message) {
+          this.logs.push(message);
+        },
+        _reset: function() {
+          this.logs = [];
+        }
+      },
+
+      createMockSheet: function(name, data) {
+        return {
+          name: name,
+          data: JSON.parse(JSON.stringify(data)), // Deep copy
+          getLastRow: function() {
+            return this.data.length;
+          },
+          getDataRange: function() {
+            return this;
+          },
+          getValues: function() {
+            return this.data;
+          },
+          getRange: function(row, col, numRows, numCols) {
+            const self = this;
+            return {
+              _row: row,
+              _col: col,
+              _numRows: numRows || 1,
+              _numCols: numCols || 1,
+              setValue: function(value) {
+                while (self.data.length < this._row) {
+                  self.data.push([]);
+                }
+                while (self.data[this._row - 1].length < this._col) {
+                  self.data[this._row - 1].push('');
+                }
+                self.data[this._row - 1][this._col - 1] = value;
+              },
+              getValues: function() {
+                // Simplified getValue for single cell
+                return [[self.data[this._row - 1][this._col - 1]]];
+              }
+            };
+          }
+        };
+      },
+
+      _resetAll: function() {
+        this.DriveApp._reset();
+        this.DocumentApp._reset();
+        this.SpreadsheetApp._reset();
+        this.UrlFetchApp._reset();
+        this.Logger._reset();
+      }
+    };
+
+    // Assign mocks to global scope
+    const DriveApp = Mocks.DriveApp;
+    const DocumentApp = Mocks.DocumentApp;
+    const SpreadsheetApp = Mocks.SpreadsheetApp;
+    const UrlFetchApp = Mocks.UrlFetchApp;
+    const Logger = Mocks.Logger;
+
+    QUnit.module('Social Media Suite', {
+      beforeEach: function() {
+        Mocks._resetAll();
+      }
+    });
+
+    // Tests will go here
+    QUnit.test('getChatGPTResponse - success', function(assert) {
+      const prompt = 'test prompt';
+      const expectedResponse = 'Test content';
+      const gptResponse = {
+        choices: [{ message: { content: expectedResponse } }]
+      };
+      UrlFetchApp._setResponse('https://api.openai.com/v1/chat/completions', gptResponse);
+
+      const result = getChatGPTResponse(prompt);
+      assert.equal(result, expectedResponse, 'Should return the content from the API response');
+    });
+
+    QUnit.test('getChatGPTResponse - error', function(assert) {
+      const prompt = 'test prompt';
+      UrlFetchApp._setError('https://api.openai.com/v1/chat/completions', 'API error');
+
+      const result = getChatGPTResponse(prompt);
+      assert.equal(result, null, 'Should return null on API error');
+      assert.ok(Logger.logs.length > 0, 'Should log an error message');
+    });
+
+    QUnit.test('createBitlyLink - success', function(assert) {
+      const longUrl = 'http://example.com';
+      const bitlyLink = 'http://bit.ly/123';
+      UrlFetchApp._setResponse('https://api-ssl.bitly.com/v4/shorten', { link: bitlyLink });
+
+      const result = createBitlyLink(longUrl);
+      assert.equal(result, bitlyLink, 'Should return the shortened link');
+    });
+
+    QUnit.test('createBitlyLink - error', function(assert) {
+      const longUrl = 'http://example.com';
+      UrlFetchApp._setError('https://api-ssl.bitly.com/v4/shorten', 'API error');
+
+      const result = createBitlyLink(longUrl);
+      assert.equal(result, null, 'Should return null on API error');
+      assert.ok(Logger.logs.length > 0, 'Should log an error message');
+    });
+
+    QUnit.test('generateMultiTabDrafts - full flow', function(assert) {
+      const centralSheetData = [
+        ['Θέμα', 'Γλώσσα'],
+        ['Test Topic 1', 'EL'],
+        ['Test Topic 2', 'BOTH']
+      ];
+      SpreadsheetApp.spreadsheet._addSheet('Κεντρικό', centralSheetData);
+
+      const gptContent = "Hook: Test Hook\nΚείμενο: Test Text\nHashtags: #test\nCTA: Test CTA";
+      const gptResponse = { choices: [{ message: { content: gptContent } }] };
+      UrlFetchApp._setResponse('https://api.openai.com/v1/chat/completions', gptResponse);
+
+      generateMultiTabDrafts();
+
+      const platforms = ["TikTok", "Instagram", "Facebook", "Pinterest", "YouTube"];
+      for (const platform of platforms) {
+        const sheet = SpreadsheetApp.spreadsheet.getSheetByName(platform);
+        assert.ok(sheet, `Sheet for ${platform} should be created`);
+        const data = sheet.getValues();
+        assert.equal(data.length, 3, `Sheet for ${platform} should have 3 rows (header + 2 topics)`);
+
+        assert.equal(data[1][0], 'Test Topic 1', 'Topic 1 should be written');
+        assert.equal(data[1][1], 'Test Hook', 'Hook for Topic 1 (EL) should be correct');
+
+        assert.equal(data[2][0], 'Test Topic 2', 'Topic 2 should be written');
+        assert.equal(data[2][1], 'Test Hook', 'Hook for Topic 2 (EL) should be correct');
+        assert.equal(data[2][5], 'Test Hook', 'Hook for Topic 2 (EN) should be correct');
+      }
+    });
+
+    QUnit.test('generateBitlyLinks - basic functionality', function(assert) {
+        const sheetData = [
+            ['Original URL', 'Bitly Link'],
+            ['http://example.com/1', ''],
+            ['http://example.com/2', 'http://bit.ly/existing'],
+            ['http://example.com/3', '']
+        ];
+        SpreadsheetApp.spreadsheet._addSheet('Κεντρικό', sheetData);
+        UrlFetchApp._setResponse('https://api-ssl.bitly.com/v4/shorten', { link: 'http://bit.ly/shortened' });
+
+        generateBitlyLinks();
+
+        const sheet = SpreadsheetApp.spreadsheet.getSheetByName('Κεντρικό');
+        const data = sheet.getValues();
+        assert.equal(data[1][1], 'http://bit.ly/shortened', 'Should add bitly link for first URL');
+        assert.equal(data[2][1], 'http://bit.ly/existing', 'Should not change existing bitly link');
+        assert.equal(data[3][1], 'http://bit.ly/shortened', 'Should add bitly link for third URL');
+    });
+
+    QUnit.test('updateBitlyClicks - functionality', function(assert) {
+        const sheetData = [
+            ['Bitly Link', 'Clicks'],
+            ['http://bit.ly/abc', 0],
+            ['http://bit.ly/def', 10]
+        ];
+        SpreadsheetApp.spreadsheet._addSheet('Κεντρικό', sheetData);
+        UrlFetchApp._setResponse('https://api-ssl.bitly.com/v4/bitlinks/abc/clicks/summary', { total_clicks: 5 });
+        UrlFetchApp._setResponse('https://api-ssl.bitly.com/v4/bitlinks/def/clicks/summary', { total_clicks: 15 });
+
+        updateBitlyClicks();
+
+        const sheet = SpreadsheetApp.spreadsheet.getSheetByName('Κεντρικό');
+        const data = sheet.getValues();
+        assert.equal(data[1][1], 5, 'Should update clicks for first link');
+        assert.equal(data[2][1], 15, 'Should update clicks for second link');
+    });
+
+    QUnit.test('generatePDFsFromDrafts - functionality', function(assert) {
+        const centralSheetData = [
+            ['Θέμα', 'Γλώσσα', 'PDF Link'],
+            ['My Topic', 'EL', '']
+        ];
+        SpreadsheetApp.spreadsheet._addSheet('Κεντρικό', centralSheetData);
+        const facebookSheetData = [
+            ['Θέμα', 'Hook', 'Text', 'Hashtags', 'CTA'],
+            ['My Topic', 'FB Hook', 'FB Text', '#fb', 'FB CTA']
+        ];
+        SpreadsheetApp.spreadsheet._addSheet('Facebook', facebookSheetData);
+
+        generatePDFsFromDrafts();
+
+        const doc = Object.values(DocumentApp.documents)[0];
+        assert.ok(doc, 'A document should be created');
+        assert.equal(doc.name, 'My Topic', 'Document name should be the topic');
+
+        const centralSheet = SpreadsheetApp.spreadsheet.getSheetByName('Κεντρικό');
+        const pdfLink = centralSheet.getValues()[1][2];
+        assert.ok(pdfLink.startsWith('http://fake.drive.url/'), 'PDF link should be set in the central sheet');
+    });
+  </script>
+</body>
+</html>
